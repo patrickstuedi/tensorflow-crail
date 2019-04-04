@@ -19,6 +19,8 @@ limitations under the License.
 
 #include "crail/client/crail_store.h"
 
+using namespace crail;
+
 namespace tensorflow {
 namespace data {
 namespace {
@@ -333,6 +335,7 @@ private:
     const DataTypeVector output_types_;
   };
   DataTypeVector output_types_;
+  CrailStore crail_store_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("SequenceFileDataset").Device(DEVICE_CPU),
