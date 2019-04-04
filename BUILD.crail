@@ -1,0 +1,17 @@
+package(
+    default_visibility = ["//visibility:public"]
+)
+
+cc_library(
+    name = "crail",
+    srcs = [
+        "lib/libcrail.so", #.so files to include in the lib
+    ],
+		hdrs = glob([
+        "include/**/*.h",                                                                                                                 
+        "include/**/*.hpp",                                                                                                               
+        "include/**/*.inl",   
+		]),
+    includes = ["include/"],
+)
+

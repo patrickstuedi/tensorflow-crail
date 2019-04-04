@@ -17,6 +17,8 @@ limitations under the License.
 #include "tensorflow/core/lib/io/buffered_inputstream.h"
 #include "tensorflow/core/platform/file_system.h"
 
+#include "crail/client/crail_store.h"
+
 namespace tensorflow {
 namespace data {
 namespace {
@@ -25,8 +27,8 @@ static const size_t kSyncMarkerSize = 16;
 static const size_t kSequenceFileBufferSize = 1024 * 1024;
 
 class SequenceFileReader {
- public:
-  explicit SequenceFileReader(RandomAccessFile* file)
+public:
+  explicit SequenceFileReader(RandomAccessFile *file)
       : input_stream_(
             new io::BufferedInputStream(file, kSequenceFileBufferSize)) {}
 
@@ -84,7 +86,7 @@ class SequenceFileReader {
     return Status::OK();
   }
 
-  Status ReadRecord(string* key, string* value) {
+  Status ReadRecord(string *key, string *value) {
     uint32 length = 0;
     TF_RETURN_IF_ERROR(ReadUInt32(&length));
     if (length == static_cast<uint32>(-1)) {
@@ -114,7 +116,7 @@ class SequenceFileReader {
     return Status::OK();
   }
 
-  Status ReadString(string* value) {
+  Status ReadString(string *value) {
     int64 length = 0;
     TF_RETURN_IF_ERROR(ReadVInt(&length));
     if (value == nullptr) {
@@ -123,7 +125,7 @@ class SequenceFileReader {
     return input_stream_->ReadNBytes(length, value);
   }
 
-  Status ReadUInt32(uint32* value) {
+  Status ReadUInt32(uint32 *value) {
     string buffer;
     TF_RETURN_IF_ERROR(input_stream_->ReadNBytes(4, &buffer));
     *value = ((static_cast<uint32>(buffer[0]) << 24) |
@@ -133,7 +135,7 @@ class SequenceFileReader {
     return Status::OK();
   }
 
-  Status ReadVInt(int64* value) {
+  Status ReadVInt(int64 *value) {
     string buffer;
     TF_RETURN_IF_ERROR(input_stream_->ReadNBytes(1, &buffer));
     if (buffer[0] >= -112) {
@@ -165,7 +167,7 @@ class SequenceFileReader {
 
   virtual ~SequenceFileReader() = default;
 
- private:
+private:
   std::unique_ptr<io::InputStreamInterface> input_stream_;
   string key_class_name_;
   string value_class_name_;
@@ -176,20 +178,20 @@ class SequenceFileReader {
   TF_DISALLOW_COPY_AND_ASSIGN(SequenceFileReader);
 };
 class SequenceFileDatasetOp : public DatasetOpKernel {
- public:
+public:
   using DatasetOpKernel::DatasetOpKernel;
-  explicit SequenceFileDatasetOp(OpKernelConstruction* ctx)
+  explicit SequenceFileDatasetOp(OpKernelConstruction *ctx)
       : DatasetOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("output_types", &output_types_));
-    for (const DataType& dt : output_types_) {
+    for (const DataType &dt : output_types_) {
       OP_REQUIRES(ctx, dt == DT_STRING,
                   errors::InvalidArgument(
                       "Each element of `output_types_` must be one of: "
                       "DT_STRING"));
     }
   }
-  void MakeDataset(OpKernelContext* ctx, DatasetBase** output) override {
-    const Tensor* filenames_tensor;
+  void MakeDataset(OpKernelContext *ctx, DatasetBase **output) override {
+    const Tensor *filenames_tensor;
     OP_REQUIRES_OK(ctx, ctx->input("filenames", &filenames_tensor));
     OP_REQUIRES(
         ctx, filenames_tensor->dims() <= 1,
@@ -204,27 +206,26 @@ class SequenceFileDatasetOp : public DatasetOpKernel {
     *output = new Dataset(ctx, filenames, output_types_);
   }
 
- private:
+private:
   class Dataset : public DatasetBase {
-   public:
-    Dataset(OpKernelContext* ctx, const std::vector<string>& filenames,
-            const DataTypeVector& output_types)
-        : DatasetBase(DatasetContext(ctx)),
-          filenames_(filenames),
+  public:
+    Dataset(OpKernelContext *ctx, const std::vector<string> &filenames,
+            const DataTypeVector &output_types)
+        : DatasetBase(DatasetContext(ctx)), filenames_(filenames),
           output_types_(output_types) {}
 
-    std::unique_ptr<IteratorBase> MakeIteratorInternal(
-        const string& prefix) const override {
+    std::unique_ptr<IteratorBase>
+    MakeIteratorInternal(const string &prefix) const override {
       return std::unique_ptr<IteratorBase>(
           new Iterator({this, strings::StrCat(prefix, "::SequenceFile")}));
     }
 
-    const DataTypeVector& output_dtypes() const override {
+    const DataTypeVector &output_dtypes() const override {
       return output_types_;
     }
 
-    const std::vector<PartialTensorShape>& output_shapes() const override {
-      static std::vector<PartialTensorShape>* shapes =
+    const std::vector<PartialTensorShape> &output_shapes() const override {
+      static std::vector<PartialTensorShape> *shapes =
           new std::vector<PartialTensorShape>({{}, {}});
       return *shapes;
     }
@@ -233,25 +234,25 @@ class SequenceFileDatasetOp : public DatasetOpKernel {
       return "SequenceFileDatasetOp::Dataset";
     }
 
-   protected:
-    Status AsGraphDefInternal(SerializationContext* ctx,
-                              DatasetGraphDefBuilder* b,
-                              Node** output) const override {
-      Node* filenames = nullptr;
+  protected:
+    Status AsGraphDefInternal(SerializationContext *ctx,
+                              DatasetGraphDefBuilder *b,
+                              Node **output) const override {
+      Node *filenames = nullptr;
       TF_RETURN_IF_ERROR(b->AddVector(filenames_, &filenames));
       TF_RETURN_IF_ERROR(b->AddDataset(this, {filenames}, output));
       return Status::OK();
     }
 
-   private:
+  private:
     class Iterator : public DatasetIterator<Dataset> {
-     public:
-      explicit Iterator(const Params& params)
+    public:
+      explicit Iterator(const Params &params)
           : DatasetIterator<Dataset>(params) {}
 
-      Status GetNextInternal(IteratorContext* ctx,
-                             std::vector<Tensor>* out_tensors,
-                             bool* end_of_sequence) override {
+      Status GetNextInternal(IteratorContext *ctx,
+                             std::vector<Tensor> *out_tensors,
+                             bool *end_of_sequence) override {
         mutex_lock l(mu_);
         do {
           // We are currently processing a file, so try to read the next record.
@@ -288,21 +289,21 @@ class SequenceFileDatasetOp : public DatasetOpKernel {
         } while (true);
       }
 
-     protected:
-      Status SaveInternal(IteratorStateWriter* writer) override {
+    protected:
+      Status SaveInternal(IteratorStateWriter *writer) override {
         return errors::Unimplemented("SaveInternal is currently not supported");
       }
 
-      Status RestoreInternal(IteratorContext* ctx,
-                             IteratorStateReader* reader) override {
+      Status RestoreInternal(IteratorContext *ctx,
+                             IteratorStateReader *reader) override {
         return errors::Unimplemented(
             "RestoreInternal is currently not supported");
       }
 
-     private:
+    private:
       // Sets up SequenceFile streams to read from the topic at
       // `current_file_index_`.
-      Status SetupStreamsLocked(Env* env) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+      Status SetupStreamsLocked(Env *env) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
         if (current_file_index_ >= dataset()->filenames_.size()) {
           return errors::InvalidArgument(
               "current_file_index_:", current_file_index_,
@@ -310,7 +311,7 @@ class SequenceFileDatasetOp : public DatasetOpKernel {
         }
 
         // Actually move on to next file.
-        const string& filename = dataset()->filenames_[current_file_index_];
+        const string &filename = dataset()->filenames_[current_file_index_];
         TF_RETURN_IF_ERROR(env->NewRandomAccessFile(filename, &file_));
         reader_.reset(new SequenceFileReader(file_.get()));
         return reader_->ReadHeader();
@@ -337,6 +338,6 @@ class SequenceFileDatasetOp : public DatasetOpKernel {
 REGISTER_KERNEL_BUILDER(Name("SequenceFileDataset").Device(DEVICE_CPU),
                         SequenceFileDatasetOp);
 
-}  // namespace
-}  // namespace data
-}  // namespace tensorflow
+} // namespace
+} // namespace data
+} // namespace tensorflow
