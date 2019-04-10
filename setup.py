@@ -21,9 +21,9 @@ from setuptools import find_packages
 from setuptools import setup
 from setuptools.dist import Distribution
 
-__version__ = '0.2.0'
+__version__ = '0.1.0'
 REQUIRED_PACKAGES = [
-    'tensorflow == 1.12.0',
+        'tensorflow-transform>=0.13,<0.14',
 ]
 project_name = 'tensorflow-crail'
 
@@ -37,9 +37,9 @@ class BinaryDistribution(Distribution):
 setup(
     name=project_name,
     version=__version__,
-    description=('TensorFlow IO'),
-    author='Google Inc.',
-    author_email='opensource@google.com',
+    description=('TensorFlow Crail'),
+    author='IBM Research',
+    author_email='stu@zurich.ibm.com',
     # Contained modules and scripts.
     packages=find_packages(),
     install_requires=REQUIRED_PACKAGES,
@@ -63,5 +63,5 @@ setup(
         'Topic :: Software Development :: Libraries',
     ],
     license='Apache 2.0',
-    keywords='tensorflow io machine learning',
+    keywords='tensorflow crail',
 )
