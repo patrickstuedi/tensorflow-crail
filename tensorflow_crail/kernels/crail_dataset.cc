@@ -13,12 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include <iostream>
+
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/lib/io/buffered_inputstream.h"
 #include "tensorflow/core/platform/file_system.h"
 
 #include "crail/client/crail_store.h"
 
+using namespace std;
 using namespace crail;
 
 namespace tensorflow {
@@ -179,6 +182,126 @@ private:
   string compression_codec_class_name_;
   TF_DISALLOW_COPY_AND_ASSIGN(CrailReader);
 };
+
+class CrailDatasetBase : public DatasetBase {
+public:
+  CrailDatasetBase(OpKernelContext *ctx, const std::vector<string> &filenames,
+                   const DataTypeVector &output_types)
+      : DatasetBase(DatasetContext(ctx)), filenames_(filenames),
+        output_types_(output_types) {}
+
+  std::unique_ptr<IteratorBase>
+  MakeIteratorInternal(const string &prefix) const override {
+    return std::unique_ptr<IteratorBase>(
+        new Iterator({this, strings::StrCat(prefix, "::SequenceFile")}));
+  }
+
+  const DataTypeVector &output_dtypes() const override { return output_types_; }
+
+  const std::vector<PartialTensorShape> &output_shapes() const override {
+    static std::vector<PartialTensorShape> *shapes =
+        new std::vector<PartialTensorShape>({{}, {}});
+    return *shapes;
+  }
+
+  string DebugString() const override { return "CrailDatasetBase"; }
+
+protected:
+  Status AsGraphDefInternal(SerializationContext *ctx,
+                            DatasetGraphDefBuilder *b,
+                            Node **output) const override {
+    Node *filenames = nullptr;
+    TF_RETURN_IF_ERROR(b->AddVector(filenames_, &filenames));
+    TF_RETURN_IF_ERROR(b->AddDataset(this, {filenames}, output));
+    return Status::OK();
+  }
+
+private:
+  class Iterator : public DatasetIterator<CrailDatasetBase> {
+  public:
+    explicit Iterator(const Params &params)
+        : DatasetIterator<CrailDatasetBase>(params) {}
+
+    Status GetNextInternal(IteratorContext *ctx,
+                           std::vector<Tensor> *out_tensors,
+                           bool *end_of_sequence) override {
+      mutex_lock l(mu_);
+      do {
+        // We are currently processing a file, so try to read the next record.
+        if (reader_) {
+          string key, value;
+          Status status = reader_->ReadRecord(&key, &value);
+          if (!errors::IsOutOfRange(status)) {
+            TF_RETURN_IF_ERROR(status);
+
+            Tensor key_tensor(ctx->allocator({}), DT_STRING, {});
+            key_tensor.scalar<string>()() = key;
+            out_tensors->emplace_back(std::move(key_tensor));
+
+            Tensor value_tensor(ctx->allocator({}), DT_STRING, {});
+            value_tensor.scalar<string>()() = value;
+            out_tensors->emplace_back(std::move(value_tensor));
+
+            *end_of_sequence = false;
+            return Status::OK();
+          }
+          // We have reached the end of the current file, so maybe
+          // move on to next file.
+          ResetStreamsLocked();
+          ++current_file_index_;
+        }
+
+        // Iteration ends when there are no more files to process.
+        if (current_file_index_ == dataset()->filenames_.size()) {
+          *end_of_sequence = true;
+          return Status::OK();
+        }
+
+        TF_RETURN_IF_ERROR(SetupStreamsLocked(ctx->env()));
+      } while (true);
+    }
+
+  protected:
+    Status SaveInternal(IteratorStateWriter *writer) override {
+      return errors::Unimplemented("SaveInternal is currently not supported");
+    }
+
+    Status RestoreInternal(IteratorContext *ctx,
+                           IteratorStateReader *reader) override {
+      return errors::Unimplemented(
+          "RestoreInternal is currently not supported");
+    }
+
+  private:
+    Status SetupStreamsLocked(Env *env) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+      if (current_file_index_ >= dataset()->filenames_.size()) {
+        return errors::InvalidArgument(
+            "current_file_index_:", current_file_index_,
+            " >= filenames_.size():", dataset()->filenames_.size());
+      }
+
+      // Actually move on to next file.
+      const string &filename = dataset()->filenames_[current_file_index_];
+      TF_RETURN_IF_ERROR(env->NewRandomAccessFile(filename, &file_));
+      reader_.reset(new CrailReader(file_.get()));
+      return reader_->ReadHeader();
+    }
+
+    void ResetStreamsLocked() EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+      reader_.reset();
+      file_.reset();
+    }
+
+    mutex mu_;
+    size_t current_file_index_ GUARDED_BY(mu_) = 0;
+    std::unique_ptr<RandomAccessFile> file_ GUARDED_BY(mu_);
+    std::unique_ptr<CrailReader> reader_ GUARDED_BY(mu_);
+  };
+
+  const std::vector<string> filenames_;
+  const DataTypeVector output_types_;
+};
+
 class CrailDatasetOp : public DatasetOpKernel {
 public:
   using DatasetOpKernel::DatasetOpKernel;
@@ -204,130 +327,14 @@ public:
       filenames.push_back(filenames_tensor->flat<string>()(i));
     }
 
-    *output = new Dataset(ctx, filenames, output_types_);
+    for (string s : filenames) {
+      cout << "MakeDataset, filename " << s << endl;
+    }
+
+    *output = new CrailDatasetBase(ctx, filenames, output_types_);
   }
 
 private:
-  class Dataset : public DatasetBase {
-  public:
-    Dataset(OpKernelContext *ctx, const std::vector<string> &filenames,
-            const DataTypeVector &output_types)
-        : DatasetBase(DatasetContext(ctx)), filenames_(filenames),
-          output_types_(output_types) {}
-
-    std::unique_ptr<IteratorBase>
-    MakeIteratorInternal(const string &prefix) const override {
-      return std::unique_ptr<IteratorBase>(
-          new Iterator({this, strings::StrCat(prefix, "::SequenceFile")}));
-    }
-
-    const DataTypeVector &output_dtypes() const override {
-      return output_types_;
-    }
-
-    const std::vector<PartialTensorShape> &output_shapes() const override {
-      static std::vector<PartialTensorShape> *shapes =
-          new std::vector<PartialTensorShape>({{}, {}});
-      return *shapes;
-    }
-
-    string DebugString() const override { return "CrailDatasetOp::Dataset"; }
-
-  protected:
-    Status AsGraphDefInternal(SerializationContext *ctx,
-                              DatasetGraphDefBuilder *b,
-                              Node **output) const override {
-      Node *filenames = nullptr;
-      TF_RETURN_IF_ERROR(b->AddVector(filenames_, &filenames));
-      TF_RETURN_IF_ERROR(b->AddDataset(this, {filenames}, output));
-      return Status::OK();
-    }
-
-  private:
-    class Iterator : public DatasetIterator<Dataset> {
-    public:
-      explicit Iterator(const Params &params)
-          : DatasetIterator<Dataset>(params) {}
-
-      Status GetNextInternal(IteratorContext *ctx,
-                             std::vector<Tensor> *out_tensors,
-                             bool *end_of_sequence) override {
-        mutex_lock l(mu_);
-        do {
-          // We are currently processing a file, so try to read the next record.
-          if (reader_) {
-            string key, value;
-            Status status = reader_->ReadRecord(&key, &value);
-            if (!errors::IsOutOfRange(status)) {
-              TF_RETURN_IF_ERROR(status);
-
-              Tensor key_tensor(ctx->allocator({}), DT_STRING, {});
-              key_tensor.scalar<string>()() = key;
-              out_tensors->emplace_back(std::move(key_tensor));
-
-              Tensor value_tensor(ctx->allocator({}), DT_STRING, {});
-              value_tensor.scalar<string>()() = value;
-              out_tensors->emplace_back(std::move(value_tensor));
-
-              *end_of_sequence = false;
-              return Status::OK();
-            }
-            // We have reached the end of the current file, so maybe
-            // move on to next file.
-            ResetStreamsLocked();
-            ++current_file_index_;
-          }
-
-          // Iteration ends when there are no more files to process.
-          if (current_file_index_ == dataset()->filenames_.size()) {
-            *end_of_sequence = true;
-            return Status::OK();
-          }
-
-          TF_RETURN_IF_ERROR(SetupStreamsLocked(ctx->env()));
-        } while (true);
-      }
-
-    protected:
-      Status SaveInternal(IteratorStateWriter *writer) override {
-        return errors::Unimplemented("SaveInternal is currently not supported");
-      }
-
-      Status RestoreInternal(IteratorContext *ctx,
-                             IteratorStateReader *reader) override {
-        return errors::Unimplemented(
-            "RestoreInternal is currently not supported");
-      }
-
-    private:
-      Status SetupStreamsLocked(Env *env) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-        if (current_file_index_ >= dataset()->filenames_.size()) {
-          return errors::InvalidArgument(
-              "current_file_index_:", current_file_index_,
-              " >= filenames_.size():", dataset()->filenames_.size());
-        }
-
-        // Actually move on to next file.
-        const string &filename = dataset()->filenames_[current_file_index_];
-        TF_RETURN_IF_ERROR(env->NewRandomAccessFile(filename, &file_));
-        reader_.reset(new CrailReader(file_.get()));
-        return reader_->ReadHeader();
-      }
-
-      void ResetStreamsLocked() EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-        reader_.reset();
-        file_.reset();
-      }
-
-      mutex mu_;
-      size_t current_file_index_ GUARDED_BY(mu_) = 0;
-      std::unique_ptr<RandomAccessFile> file_ GUARDED_BY(mu_);
-      std::unique_ptr<CrailReader> reader_ GUARDED_BY(mu_);
-    };
-
-    const std::vector<string> filenames_;
-    const DataTypeVector output_types_;
-  };
   DataTypeVector output_types_;
   CrailStore crail_store_;
 };
