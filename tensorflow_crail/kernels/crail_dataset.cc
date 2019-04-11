@@ -28,9 +28,9 @@ namespace {
 static const size_t kSyncMarkerSize = 16;
 static const size_t kSequenceFileBufferSize = 1024 * 1024;
 
-class SequenceFileReader {
+class CrailReader {
 public:
-  explicit SequenceFileReader(RandomAccessFile *file)
+  explicit CrailReader(RandomAccessFile *file)
       : input_stream_(
             new io::BufferedInputStream(file, kSequenceFileBufferSize)) {}
 
@@ -167,7 +167,7 @@ public:
     return Status::OK();
   }
 
-  virtual ~SequenceFileReader() = default;
+  virtual ~CrailReader() = default;
 
 private:
   std::unique_ptr<io::InputStreamInterface> input_stream_;
@@ -177,13 +177,12 @@ private:
   bool compression_;
   bool block_compression_;
   string compression_codec_class_name_;
-  TF_DISALLOW_COPY_AND_ASSIGN(SequenceFileReader);
+  TF_DISALLOW_COPY_AND_ASSIGN(CrailReader);
 };
-class SequenceFileDatasetOp : public DatasetOpKernel {
+class CrailDatasetOp : public DatasetOpKernel {
 public:
   using DatasetOpKernel::DatasetOpKernel;
-  explicit SequenceFileDatasetOp(OpKernelConstruction *ctx)
-      : DatasetOpKernel(ctx) {
+  explicit CrailDatasetOp(OpKernelConstruction *ctx) : DatasetOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("output_types", &output_types_));
     for (const DataType &dt : output_types_) {
       OP_REQUIRES(ctx, dt == DT_STRING,
@@ -232,9 +231,7 @@ private:
       return *shapes;
     }
 
-    string DebugString() const override {
-      return "SequenceFileDatasetOp::Dataset";
-    }
+    string DebugString() const override { return "CrailDatasetOp::Dataset"; }
 
   protected:
     Status AsGraphDefInternal(SerializationContext *ctx,
@@ -303,8 +300,6 @@ private:
       }
 
     private:
-      // Sets up SequenceFile streams to read from the topic at
-      // `current_file_index_`.
       Status SetupStreamsLocked(Env *env) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
         if (current_file_index_ >= dataset()->filenames_.size()) {
           return errors::InvalidArgument(
@@ -315,11 +310,10 @@ private:
         // Actually move on to next file.
         const string &filename = dataset()->filenames_[current_file_index_];
         TF_RETURN_IF_ERROR(env->NewRandomAccessFile(filename, &file_));
-        reader_.reset(new SequenceFileReader(file_.get()));
+        reader_.reset(new CrailReader(file_.get()));
         return reader_->ReadHeader();
       }
 
-      // Resets all Hadoop SequenceFile streams.
       void ResetStreamsLocked() EXCLUSIVE_LOCKS_REQUIRED(mu_) {
         reader_.reset();
         file_.reset();
@@ -328,7 +322,7 @@ private:
       mutex mu_;
       size_t current_file_index_ GUARDED_BY(mu_) = 0;
       std::unique_ptr<RandomAccessFile> file_ GUARDED_BY(mu_);
-      std::unique_ptr<SequenceFileReader> reader_ GUARDED_BY(mu_);
+      std::unique_ptr<CrailReader> reader_ GUARDED_BY(mu_);
     };
 
     const std::vector<string> filenames_;
@@ -338,8 +332,8 @@ private:
   CrailStore crail_store_;
 };
 
-REGISTER_KERNEL_BUILDER(Name("SequenceFileDataset").Device(DEVICE_CPU),
-                        SequenceFileDatasetOp);
+REGISTER_KERNEL_BUILDER(Name("CrailDataset").Device(DEVICE_CPU),
+                        CrailDatasetOp);
 
 } // namespace
 } // namespace data

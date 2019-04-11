@@ -12,21 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-"""Sequence File Dataset.
+"""Crail Dataset.
 
-@@SequenceFileDataset
+@@CrailDataset
 """
 
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from tensorflow_crail.python.ops.crail_ops import SequenceFileDataset
+from tensorflow_crail.python.ops.crail_ops import CrailDataset
 
 from tensorflow.python.util.all_util import remove_undocumented
 
 _allowed_symbols = [
-    "SequenceFileDataset",
+    "CrailDataset",
 ]
 
 remove_undocumented(__name__)
