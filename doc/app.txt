@@ -1,7 +1,7 @@
 import tensorflow as tf
 import tensorflow_crail as crail
 
-dataset = CrailDataset("/tmp.dat")
+dataset = crail.CrailDataset("/tmp.dat")
 iterator = dataset.make_one_shot_iterator()
 next_obj = iterator.get_next()
 
