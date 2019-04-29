@@ -14,11 +14,13 @@ limitations under the License.
 ==============================================================================*/
 
 #include <iostream>
+#include <memory>
 
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/lib/io/buffered_inputstream.h"
 #include "tensorflow/core/platform/file_system.h"
 
+#include "crail/client/crail_file.h"
 #include "crail/client/crail_store.h"
 
 using namespace std;
@@ -173,7 +175,7 @@ public:
   virtual ~CrailReader() = default;
 
 private:
-  std::unique_ptr<io::InputStreamInterface> input_stream_;
+  unique_ptr<io::InputStreamInterface> input_stream_;
   string key_class_name_;
   string value_class_name_;
   string sync_marker_;
@@ -185,22 +187,22 @@ private:
 
 class CrailDatasetBase : public DatasetBase {
 public:
-  CrailDatasetBase(OpKernelContext *ctx, const std::vector<string> &filenames,
+  CrailDatasetBase(OpKernelContext *ctx, const vector<string> &filenames,
                    const DataTypeVector &output_types)
       : DatasetBase(DatasetContext(ctx)), filenames_(filenames),
         output_types_(output_types) {}
 
-  std::unique_ptr<IteratorBase>
+  unique_ptr<IteratorBase>
   MakeIteratorInternal(const string &prefix) const override {
-    return std::unique_ptr<IteratorBase>(
+    return unique_ptr<IteratorBase>(
         new Iterator({this, strings::StrCat(prefix, "::SequenceFile")}));
   }
 
   const DataTypeVector &output_dtypes() const override { return output_types_; }
 
-  const std::vector<PartialTensorShape> &output_shapes() const override {
-    static std::vector<PartialTensorShape> *shapes =
-        new std::vector<PartialTensorShape>({{}, {}});
+  const vector<PartialTensorShape> &output_shapes() const override {
+    static vector<PartialTensorShape> *shapes =
+        new vector<PartialTensorShape>({{}, {}});
     return *shapes;
   }
 
@@ -220,10 +222,17 @@ private:
   class Iterator : public DatasetIterator<CrailDatasetBase> {
   public:
     explicit Iterator(const Params &params)
-        : DatasetIterator<CrailDatasetBase>(params) {}
+        : DatasetIterator<CrailDatasetBase>(params) {
+      this->crail_store_ = make_unique<CrailStore>();
+      string braddress = "127.0.0.1";
+      int port = 9060;
+      CrailStore _tmpStore;
+      string name = "/bla";
+      _tmpStore.Lookup<CrailFile>(name);
+      _tmpStore.Initialize(braddress, port);
+    }
 
-    Status GetNextInternal(IteratorContext *ctx,
-                           std::vector<Tensor> *out_tensors,
+    Status GetNextInternal(IteratorContext *ctx, vector<Tensor> *out_tensors,
                            bool *end_of_sequence) override {
       mutex_lock l(mu_);
       do {
@@ -294,11 +303,12 @@ private:
 
     mutex mu_;
     size_t current_file_index_ GUARDED_BY(mu_) = 0;
-    std::unique_ptr<RandomAccessFile> file_ GUARDED_BY(mu_);
-    std::unique_ptr<CrailReader> reader_ GUARDED_BY(mu_);
+    unique_ptr<RandomAccessFile> file_ GUARDED_BY(mu_);
+    unique_ptr<CrailStore> crail_store_;
+    unique_ptr<CrailReader> reader_ GUARDED_BY(mu_);
   };
 
-  const std::vector<string> filenames_;
+  const vector<string> filenames_;
   const DataTypeVector output_types_;
 };
 
@@ -321,7 +331,7 @@ public:
         ctx, filenames_tensor->dims() <= 1,
         errors::InvalidArgument("`filenames` must be a scalar or a vector."));
 
-    std::vector<string> filenames;
+    vector<string> filenames;
     filenames.reserve(filenames_tensor->NumElements());
     for (int i = 0; i < filenames_tensor->NumElements(); ++i) {
       filenames.push_back(filenames_tensor->flat<string>()(i));
@@ -336,7 +346,6 @@ public:
 
 private:
   DataTypeVector output_types_;
-  CrailStore crail_store_;
 };
 
 REGISTER_KERNEL_BUILDER(Name("CrailDataset").Device(DEVICE_CPU),
