@@ -20,6 +20,7 @@ limitations under the License.
 #include "tensorflow/core/lib/io/buffered_inputstream.h"
 #include "tensorflow/core/platform/file_system.h"
 
+#include "crail/client/common/byte_buffer.h"
 #include "crail/client/crail_file.h"
 #include "crail/client/crail_store.h"
 
@@ -224,12 +225,9 @@ private:
     explicit Iterator(const Params &params)
         : DatasetIterator<CrailDatasetBase>(params) {
       this->crail_store_ = make_unique<CrailStore>();
-      string braddress = "127.0.0.1";
-      int port = 9060;
-      CrailStore _tmpStore;
-      string name = "/bla";
-      _tmpStore.Lookup<CrailFile>(name);
-      _tmpStore.Initialize(braddress, port);
+      this->crail_store_->Initialize("127.0.0.1", 9060);
+      this->buffer_ = make_shared<ByteBuffer>(1);
+      this->inputstream_ = nullptr;
     }
 
     Status GetNextInternal(IteratorContext *ctx, vector<Tensor> *out_tensors,
@@ -237,12 +235,14 @@ private:
       mutex_lock l(mu_);
       do {
         // We are currently processing a file, so try to read the next record.
-        if (reader_) {
-          string key, value;
-          Status status = reader_->ReadRecord(&key, &value);
-          if (!errors::IsOutOfRange(status)) {
-            TF_RETURN_IF_ERROR(status);
-
+        if (inputstream_) {
+          buffer_->Clear();
+          int ret = inputstream_->Read(buffer_).get();
+          if (ret > 0) {
+            string tuple(reinterpret_cast<char const *>(buffer_->get_bytes()),
+                         buffer_->remaining());
+            string key = tuple;
+            string value = tuple;
             Tensor key_tensor(ctx->allocator({}), DT_STRING, {});
             key_tensor.scalar<string>()() = key;
             out_tensors->emplace_back(std::move(key_tensor));
@@ -290,10 +290,13 @@ private:
       }
 
       // Actually move on to next file.
-      const string &filename = dataset()->filenames_[current_file_index_];
-      TF_RETURN_IF_ERROR(env->NewRandomAccessFile(filename, &file_));
-      reader_.reset(new CrailReader(file_.get()));
-      return reader_->ReadHeader();
+      string filename = dataset()->filenames_[current_file_index_];
+      // TF_RETURN_IF_ERROR(env->NewRandomAccessFile(filename, &file_));
+      // reader_.reset(new CrailReader(file_.get()));
+      CrailFile file = crail_store_->Lookup<CrailFile>(filename).get();
+      cout << "file lookup, name " << filename << ", fd " << file.fd() << endl;
+      this->inputstream_ = file.inputstream();
+      return Status::OK();
     }
 
     void ResetStreamsLocked() EXCLUSIVE_LOCKS_REQUIRED(mu_) {
@@ -303,8 +306,11 @@ private:
 
     mutex mu_;
     size_t current_file_index_ GUARDED_BY(mu_) = 0;
-    unique_ptr<RandomAccessFile> file_ GUARDED_BY(mu_);
     unique_ptr<CrailStore> crail_store_;
+    unique_ptr<CrailInputstream> inputstream_ GUARDED_BY(mu_);
+    shared_ptr<ByteBuffer> buffer_;
+
+    unique_ptr<RandomAccessFile> file_ GUARDED_BY(mu_);
     unique_ptr<CrailReader> reader_ GUARDED_BY(mu_);
   };
 
@@ -337,9 +343,7 @@ public:
       filenames.push_back(filenames_tensor->flat<string>()(i));
     }
 
-    for (string s : filenames) {
-      cout << "MakeDataset, filename " << s << endl;
-    }
+    cout << "MakeDataset, filename size " << filenames.size() << endl;
 
     *output = new CrailDatasetBase(ctx, filenames, output_types_);
   }
