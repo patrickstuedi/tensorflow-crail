@@ -38,8 +38,8 @@ setup(
     name=project_name,
     version=__version__,
     description=('TensorFlow Crail'),
-    author='IBM Research',
-    author_email='stu@zurich.ibm.com',
+    author='Patrick Stuedi',
+    author_email='pstuedi@apache.org',
     # Contained modules and scripts.
     packages=find_packages(),
     install_requires=REQUIRED_PACKAGES,
